@@ -9,6 +9,9 @@ license.workspace = true
 ignis-core = { path = "../core" }
 ignis-artifact = { path = "../artifact" }
 ignis-runtime = { path = "../runtime" }
+# The llama.cpp leaf (ADR 0052). Its manifest reader is always in: a model
+# directory is recognised, and refused by name, on a build without the leaf.
+ignis-llama = { path = "../llama" }
 ignis-logging = { path = "../logging" }
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -73,3 +76,7 @@ cuda = ["ignis-core/cuda", "ignis-artifact/cuda", "ignis-runtime/cuda"]
 # Test-only: forwards `ignis-core`'s attention-input tap for
 # `tests/attention_head_point_gpu.rs`. Never enabled in a production build.
 attn-tap = ["ignis-core/attn-tap"]
+# The llama.cpp leaf (ADR 0052): a model directory (`ignis-llama.json`, GGUF
+# weights, the Hugging Face frontend files) is served by `ignis-llama` on a
+# GPU the CUDA leaf does not target. Needs `IGNIS_LLAMA_CPP_DIR` at build time.
+llama = ["ignis-llama/llama"]

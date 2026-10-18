@@ -32,6 +32,9 @@ pub fn scope(family: ModelFamily) -> &'static str {
         // Not in FAMILIES yet: spec image-model/05 gives the image model its
         // config group and decides which fields it takes.
         ModelFamily::QwenImage21 => "qwenimage21",
+        // Not in FAMILIES either: the llama leaf (ADR 0052) takes the shared
+        // values; it gets its own scope when one of them has to differ.
+        ModelFamily::Qwen3Vl4b => "qwen3vl4b",
     }
 }
 
@@ -320,11 +323,19 @@ impl FieldMeta {
         format!("{}.{}.{}", self.group, scope(family), self.name)
     }
 
-    /// The one family a field only that family takes belongs to
-    /// (`Only([family])`); `None` for a field more families take.
+    /// The one config-scoped family ([`FAMILIES`]) a field belongs to when
+    /// it is the only one of them that takes it; `None` for a field more of
+    /// them take. A family outside the scopes (the llama leaf's, ADR 0052)
+    /// does not change where a file holds the field.
     pub fn home_family(&self) -> Option<ModelFamily> {
         match self.applies {
-            Applicability::Only([family]) => Some(*family),
+            Applicability::Only(families) => {
+                let mut scoped = families.iter().filter(|f| FAMILIES.contains(f));
+                match (scoped.next(), scoped.next()) {
+                    (Some(family), None) => Some(*family),
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

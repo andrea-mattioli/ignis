@@ -1069,6 +1069,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ignis-llama"
+version = "0.6.2"
+dependencies = [
+ "cc",
+ "ignis-core",
+ "ignis-runtime",
+ "serde",
+ "serde_json",
+ "tracing",
+]
+
+[[package]]
 name = "ignis-logging"
 version = "0.6.2"
 dependencies = [
@@ -1106,6 +1118,7 @@ dependencies = [
  "ignis-artifact",
  "ignis-bench",
  "ignis-core",
+ "ignis-llama",
  "ignis-logging",
  "ignis-runtime",
  "png",

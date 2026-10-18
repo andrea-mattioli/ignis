@@ -1,0 +1,24 @@
+[package]
+name = "ignis-llama"
+description = "ignis: a step leaf over llama.cpp, for GPUs the CUDA leaf does not target (ADR 0052)"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+ignis-core = { path = "../core" }
+ignis-runtime = { path = "../runtime" }
+tracing = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[build-dependencies]
+cc = "1"
+
+[features]
+# Builds the C shim (csrc/) against a llama.cpp checkout and links its shared
+# libraries: `IGNIS_LLAMA_CPP_DIR` names the source tree, `IGNIS_LLAMA_CPP_LIB`
+# the directory holding libllama.so, libmtmd.so and the ggml libraries (default
+# `$IGNIS_LLAMA_CPP_DIR/build/bin`). Off, the crate holds only its pure parts
+# (sampling, the patch inverse, the manifest), which test on any machine.
+llama = []

@@ -13,6 +13,59 @@ use std::sync::Arc;
 use ignis_core::{ConcreteScheduler, SchedulerConfig, TokenId};
 use ignis_runtime::{Model, RuntimeCompute, StepLeaf};
 
+/// The scheduler over the llama.cpp leaf (ADR 0052): a model directory's
+/// GGUF weights in one llama.cpp context whose unified KV buffer is the
+/// pool -- `--vram-kv-pool-bytes` in tokens, or `--model-max-context` --
+/// and the encoder's mmproj when vision is on. The page ledger is the
+/// leaf's own count of that buffer, read back as the CUDA load reads its pool.
+#[cfg(feature = "llama")]
+pub fn llama_scheduler(
+    dir_path: &std::path::Path,
+    model_id: String,
+    eos: TokenId,
+    shape: EngineShape,
+    thinking_close: Option<Arc<ignis_core::thinking_budget::ThinkingClose>>,
+) -> Result<ConcreteScheduler, String> {
+    use ignis_runtime::KV_PAGE_TOKENS;
+    let dir = ignis_llama::manifest::ModelDir::open(dir_path)?;
+    let pool_tokens = match shape.kv_pool {
+        Some(ignis_core::KvPoolSize::Tokens(tokens)) => tokens as u32,
+        _ => shape.max_context,
+    };
+    let n_ctx = pool_tokens.div_ceil(KV_PAGE_TOKENS) * KV_PAGE_TOKENS;
+    let lanes = ignis_core::N_DECODE_LANES as u32;
+    let config = ignis_llama::LlamaConfig {
+        gguf: dir.gguf(),
+        mmproj: shape.vision.and(dir.mmproj()),
+        n_ctx,
+        // every lane, every retained slot, and room for the published prefixes
+        n_seq_max: (2 * lanes + shape.retained_slots() + 16).min(256),
+        n_batch: shape.prefill_chunk.max(512),
+        n_threads: std::thread::available_parallelism().map_or(4, |n| n.get() as i32),
+        ..ignis_llama::LlamaConfig::default()
+    };
+    let leaf = ignis_llama::LlamaLeaf::new(config);
+    let model = Arc::new(Model::load(Arc::new(leaf)).map_err(|e| format!("model load: {e:?}"))?);
+    let stats = model.stats().map_err(|e| format!("runtime stats: {e:?}"))?;
+    // hotpath-lint-allow: one line per model load.
+    tracing::info!(
+        name: "ignis.llama.pool",
+        kv_pages = stats.kv_page_count,
+        kv_page_bytes = stats.kv_page_bytes,
+        held_bytes = stats.vram_bytes,
+        free_after_load_bytes = stats.free_vram_bytes,
+        "llama.cpp KV pool"
+    );
+    Ok(scheduler(
+        SchedulerConfig {
+            thinking_close,
+            ..scheduler_config_for_shape(model_id, shape, KV_PAGE_TOKENS, stats.kv_page_count)
+        },
+        model,
+        eos,
+    ))
+}
+
 /// Build the server's concrete scheduler over a loaded step-ABI model.
 pub fn scheduler<L: StepLeaf>(
     config: SchedulerConfig,
@@ -325,7 +378,7 @@ fn scheduler_with_kv_disk<L: StepLeaf>(
     Ok((ConcreteScheduler::with_config(config, Arc::new(compute)), Some(budget_bytes)))
 }
 
-#[cfg(any(feature = "cuda", test))]
+#[cfg(any(feature = "cuda", feature = "llama", test))]
 fn scheduler_config_for_shape(
     model: String,
     shape: EngineShape,

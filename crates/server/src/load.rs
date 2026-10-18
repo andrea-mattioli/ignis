@@ -211,27 +211,53 @@ pub fn prepare_model(config: &crate::config::Config, artifact: &std::path::Path)
     if !artifact.exists() {
         return Err(LoadError::ArtifactMissing);
     }
-    let sidecar = crate::loader::find_sidecar(artifact).map_err(|e| LoadError::SidecarMissing(e.to_string()))?;
-    // The image model's container holds no text frontend (spec
-    // image-model/01): it is verified, and its runner reads the rest.
-    if crate::loader::artifact_family(artifact).ok().flatten().map(ModelFamily::kind) == Some(ModelKind::Image) {
-        return prepare_image_model(config, artifact, &sidecar);
-    }
-    let frontend =
-        crate::loader::load_artifact(artifact, &sidecar).map_err(|e| LoadError::ArtifactInvalid(e.to_string()))?;
-    tracing::info!(
-        name: "ignis.artifact.verified",
-        artifact = %artifact.display(),
-        "checksum clean — tokenizer + chat template loaded"
-    );
+    let (frontend, family) = if ignis_llama::manifest::ModelDir::is_one(artifact) {
+        // ADR 0052: a llama.cpp model directory -- GGUF weights, the encoder's
+        // mmproj, the six frontend files -- checked against its manifest.
+        let dir = ignis_llama::manifest::ModelDir::open(artifact).map_err(LoadError::ArtifactInvalid)?;
+        let family = ModelFamily::of_model_id(&dir.manifest.model_id)
+            .filter(|f| *f == ModelFamily::Qwen3Vl4b)
+            .ok_or_else(|| {
+                LoadError::ModelMismatch(format!(
+                    "{} names model {:?}; the llama leaf serves {}",
+                    ignis_llama::manifest::MANIFEST,
+                    dir.manifest.model_id,
+                    ModelFamily::Qwen3Vl4b.model_id()
+                ))
+            })?;
+        let frontend =
+            ignis_artifact::FrontendSet::from_resources(|base| dir.resource(base).map_err(ignis_artifact::ArtifactError::new))
+                .map_err(|e| LoadError::ArtifactInvalid(e.to_string()))?;
+        tracing::info!(
+            name: "ignis.artifact.verified",
+            artifact = %artifact.display(),
+            "llama.cpp model directory complete — tokenizer + chat template loaded"
+        );
+        (frontend, family)
+    } else {
+        let sidecar = crate::loader::find_sidecar(artifact).map_err(|e| LoadError::SidecarMissing(e.to_string()))?;
+        // The image model's container holds no text frontend (spec
+        // image-model/01): it is verified, and its runner reads the rest.
+        if crate::loader::artifact_family(artifact).ok().flatten().map(ModelFamily::kind) == Some(ModelKind::Image) {
+            return prepare_image_model(config, artifact, &sidecar);
+        }
+        let frontend =
+            crate::loader::load_artifact(artifact, &sidecar).map_err(|e| LoadError::ArtifactInvalid(e.to_string()))?;
+        tracing::info!(
+            name: "ignis.artifact.verified",
+            artifact = %artifact.display(),
+            "checksum clean — tokenizer + chat template loaded"
+        );
 
-    // ADR 0043: the artifact names its model, and the start options meet it
-    // in one place, which decides the served id or refuses naming the model
-    // (spec flash-next/04). An artifact of neither model is served as the
-    // 27B always was.
-    let family = crate::loader::artifact_family(artifact)
-        .map_err(|e| LoadError::ArtifactInvalid(e.to_string()))?
-        .unwrap_or(ModelFamily::Qwen38_27b);
+        // ADR 0043: the artifact names its model, and the start options meet it
+        // in one place, which decides the served id or refuses naming the model
+        // (spec flash-next/04). An artifact of neither model is served as the
+        // 27B always was.
+        let family = crate::loader::artifact_family(artifact)
+            .map_err(|e| LoadError::ArtifactInvalid(e.to_string()))?
+            .unwrap_or(ModelFamily::Qwen38_27b);
+        (frontend, family)
+    };
     let config = fitted(config, family)?;
     let model = config.model.clone();
 
@@ -258,12 +284,12 @@ pub fn prepare_model(config: &crate::config::Config, artifact: &std::path::Path)
     // the load, which sizes the encoder for the processor's item bound.
     let processor = config
         .vision
-        .map(|v| crate::media::load_processor(&frontend, v, config.max_context))
+        .map(|v| crate::media::load_processor(&frontend, v, config.max_context, family))
         .transpose()
         .map_err(|e| LoadError::VisionProcessorInvalid(e.to_string()))?;
     // Only the GPU backend needs it; the mock never stops on EOS.
     let eos = frontend.eos_token_id();
-    if cfg!(feature = "cuda") && eos.is_none() {
+    if (cfg!(feature = "cuda") || cfg!(feature = "llama")) && eos.is_none() {
         return Err(LoadError::EosMissing);
     }
 
@@ -344,6 +370,32 @@ pub fn load_model(prepared: PreparedModel) -> Result<LoadedModel, LoadError> {
     let Some(PreparedText { provider, acquirer, item_bound, thinking_close, eos }) = text else {
         return load_image_model(artifact, model, &config);
     };
+    // ADR 0052: a llama.cpp model directory is the llama leaf's, on any build
+    // that has it; a build without it refuses by name rather than mock it.
+    let llama_dir = ignis_llama::manifest::ModelDir::is_one(&artifact);
+    #[cfg(feature = "llama")]
+    if llama_dir {
+        let eos = eos.ok_or(LoadError::EosMissing)?;
+        let shape = crate::runtime::EngineShape::from(&config);
+        let scheduler = crate::runtime::llama_scheduler(&artifact, model.clone(), eos, shape, thinking_close)
+            .map_err(LoadError::LoadFailed)?;
+        let (engine, driver) =
+            crate::engine::Engine::with_clock_and_driver(Box::new(scheduler), Arc::new(crate::telemetry::SystemClock));
+        let mut active = crate::ActiveModel::new(engine, Arc::new(provider))
+            .with_driver(driver)
+            .with_family(family)
+            .with_source(crate::ModelSource { artifact, model });
+        if let Some(acquirer) = acquirer {
+            active = active.with_media(acquirer);
+        }
+        return Ok(LoadedModel { model: active, reservations: None });
+    }
+    #[cfg(not(feature = "llama"))]
+    if llama_dir {
+        return Err(LoadError::LoadFailed(
+            "a llama.cpp model directory needs a build with --features llama (ADR 0052)".into(),
+        ));
+    }
     #[cfg(feature = "cuda")]
     let (scheduler, reservations) = {
         let eos = eos.ok_or(LoadError::EosMissing)?;
@@ -493,6 +545,8 @@ fn cuda_scheduler_for(
         // The image model has no token scheduler: `load_image_model` loads
         // it, never this.
         ModelFamily::QwenImage21 => Err(LoadError::LoadFailed(format!("{} has no token scheduler", family.name()))),
+        // ADR 0052: its directory is the llama leaf's, loaded before this.
+        ModelFamily::Qwen3Vl4b => Err(LoadError::LoadFailed(format!("{} is served by the llama leaf", family.name()))),
     };
     let (scheduler, reserved) = loaded?;
     tracing::info!(

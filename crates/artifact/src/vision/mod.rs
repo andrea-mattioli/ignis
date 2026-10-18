@@ -375,6 +375,11 @@ fn check_budget(budget: Budget, limit: u64, requested: u64) -> Result<(), Proces
 #[derive(Debug, Clone)]
 pub struct VisionProcessor {
     options: ProcessorOptions,
+    /// The placeholder ids prompts are laid out with: the model contract's
+    /// on the 27B ([`VisionProcessor::new`]), the tokenizer's own on a model
+    /// of the same vision contract with another vocabulary (ADR 0052).
+    image_pad_id: u32,
+    video_pad_id: u32,
 }
 
 impl FrontendSet {
@@ -414,7 +419,28 @@ impl VisionProcessor {
                 return Err(ProcessorError::PadTokenMismatch { token, expected, actual });
             }
         }
-        Ok(Self { options })
+        Ok(Self { options, image_pad_id: IMAGE_PAD_ID, video_pad_id: VIDEO_PAD_ID })
+    }
+
+    /// A processor whose placeholder ids are whatever single token
+    /// `tokenizer` encodes each placeholder to (ADR 0052): the same vision
+    /// contract over another vocabulary, Qwen3-VL's among them. A
+    /// placeholder that is not one token is still a refusal.
+    pub fn with_tokenizer_pads(tokenizer: &Tokenizer, options: ProcessorOptions) -> Result<Self, ProcessorError> {
+        let mut ids = [0u32; 2];
+        for (slot, token) in ids.iter_mut().zip([IMAGE_PAD, VIDEO_PAD]) {
+            let actual = tokenizer.encode(token).map_err(|e| ProcessorError::Tokenize(e.to_string()))?;
+            match actual.as_slice() {
+                [id] => *slot = *id,
+                _ => return Err(ProcessorError::PadTokenMismatch { token, expected: 0, actual }),
+            }
+        }
+        Ok(Self { options, image_pad_id: ids[0], video_pad_id: ids[1] })
+    }
+
+    /// The image placeholder id this processor lays prompts out with.
+    pub fn image_pad_id(&self) -> u32 {
+        self.image_pad_id
     }
 
     pub fn options(&self) -> &ProcessorOptions {
@@ -512,7 +538,7 @@ impl VisionProcessor {
                 Ok(exact.then_some(prefix.len() as u32))
             })
             .collect::<Result<_, ProcessorError>>()?;
-        let token_types = layout::token_types(&token_ids);
+        let token_types = layout::token_types_for(&token_ids, self.image_pad_id, self.video_pad_id);
         let (positions, spans, rope_delta) = layout::assign_positions(&token_types, &grids)?;
         let media = media
             .into_iter()

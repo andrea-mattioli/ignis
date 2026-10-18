@@ -65,11 +65,21 @@ pub fn expand_placeholders(rendered: &str, grids: &[Grid], boundaries: &[usize])
 /// Per-token modality: [`IMAGE`] / [`VIDEO`] for the pad ids, [`TEXT`]
 /// otherwise.
 pub fn token_types(ids: &[u32]) -> Vec<u8> {
+    token_types_for(ids, IMAGE_PAD_ID, VIDEO_PAD_ID)
+}
+
+/// [`token_types`] for a vocabulary whose placeholders are `image` and
+/// `video` (ADR 0052).
+pub fn token_types_for(ids: &[u32], image: u32, video: u32) -> Vec<u8> {
     ids.iter()
-        .map(|&id| match id {
-            IMAGE_PAD_ID => IMAGE,
-            VIDEO_PAD_ID => VIDEO,
-            _ => TEXT,
+        .map(|&id| {
+            if id == image {
+                IMAGE
+            } else if id == video {
+                VIDEO
+            } else {
+                TEXT
+            }
         })
         .collect()
 }

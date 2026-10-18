@@ -379,6 +379,14 @@ impl ArtifactTemplateProvider {
 }
 
 impl TemplateProvider for ArtifactTemplateProvider {
+    /// A template that never writes a `<think>` block never starts the
+    /// generation inside one (ADR 0052): with the default, an instruct
+    /// model's whole answer was read as reasoning and its EOS redirected to
+    /// a close it had never opened.
+    fn decoder_starts_in_reasoning(&self, thinking: &ThinkingOptions) -> bool {
+        thinking.enable_thinking && self.set.chat_template().knows_reasoning()
+    }
+
     fn apply_chat_template(
         &self,
         messages: &[ChatMessage],

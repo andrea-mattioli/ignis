@@ -87,7 +87,8 @@ pub const MAX_WINDOWS: usize = (HEADER_BYTES - CRC_TABLE_AT - 4) / 4;
 pub fn default_bytes(family: ModelFamily) -> u64 {
     match family {
         ModelFamily::FlashNext => 4 << 30,
-        ModelFamily::Qwen38_27b | ModelFamily::QwenImage21 => 0,
+        // the llama leaf snapshots through llama.cpp's own state blobs: no disk tier yet
+        ModelFamily::Qwen38_27b | ModelFamily::QwenImage21 | ModelFamily::Qwen3Vl4b => 0,
     }
 }
 
@@ -99,7 +100,7 @@ pub fn restore_floor_tokens(family: ModelFamily) -> u32 {
     match family {
         ModelFamily::FlashNext => 8_192,
         ModelFamily::Qwen38_27b => 16_384,
-        ModelFamily::QwenImage21 => u32::MAX,
+        ModelFamily::QwenImage21 | ModelFamily::Qwen3Vl4b => u32::MAX,
     }
 }
 

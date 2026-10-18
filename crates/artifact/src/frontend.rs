@@ -211,19 +211,24 @@ impl FrontendSet {
     /// ambiguous resource is a load failure (ADR 0002). The set owns
     /// everything it needs, so the reader may be dropped afterwards.
     pub fn from_reader(reader: &Reader) -> Result<Self> {
-        let tokenizer_bytes = read_resource(reader, "tokenizer.json")?;
-        let tokenizer = Tokenizer::from_bytes(&tokenizer_bytes)?;
-        let chat_template =
-            ChatTemplate::from_bytes(&read_resource(reader, "chat_template.jinja")?)?;
+        Self::from_resources(|base| read_resource(reader, base))
+    }
+
+    /// The same set from any source of the six resources by base name: a
+    /// model directory next to GGUF weights (ADR 0052) carries them as the
+    /// files of the model's Hugging Face repository.
+    pub fn from_resources(read: impl Fn(&str) -> Result<Vec<u8>>) -> Result<Self> {
+        let tokenizer = Tokenizer::from_bytes(&read("tokenizer.json")?)?;
+        let chat_template = ChatTemplate::from_bytes(&read("chat_template.jinja")?)?;
         let thinking_capabilities = chat_template.probe_thinking_capabilities();
         Ok(Self {
             tokenizer,
             chat_template,
             thinking_capabilities,
-            tokenizer_config: read_resource(reader, "tokenizer_config.json")?,
-            generation_config: read_resource(reader, "generation_config.json")?,
-            preprocessor_config: read_resource(reader, "preprocessor_config.json")?,
-            video_preprocessor_config: read_resource(reader, "video_preprocessor_config.json")?,
+            tokenizer_config: read("tokenizer_config.json")?,
+            generation_config: read("generation_config.json")?,
+            preprocessor_config: read("preprocessor_config.json")?,
+            video_preprocessor_config: read("video_preprocessor_config.json")?,
         })
     }
 
@@ -446,6 +451,10 @@ pub struct DecodeStreamState {
 pub struct ChatTemplate {
     env: Environment<'static>,
     name: &'static str,
+    /// Whether the source writes a `<think>` block at all (ADR 0052): an
+    /// instruct template with none (Qwen3-VL-Instruct's) never opens one,
+    /// whatever `enable_thinking` says.
+    knows_reasoning: bool,
 }
 
 impl ChatTemplate {
@@ -461,7 +470,13 @@ impl ChatTemplate {
         Ok(Self {
             env,
             name: Self::NAME,
+            knows_reasoning: source.contains("<think>"),
         })
+    }
+
+    /// Whether this template ever writes a reasoning block.
+    pub fn knows_reasoning(&self) -> bool {
+        self.knows_reasoning
     }
 
     /// Compile a chat template from the raw bytes of

@@ -493,7 +493,9 @@ impl TransferPace {
     pub fn for_family(family: ignis_core::compute::ModelFamily) -> Self {
         match family {
             ignis_core::compute::ModelFamily::FlashNext => Self::default(),
-            ignis_core::compute::ModelFamily::Qwen38_27b | ignis_core::compute::ModelFamily::QwenImage21 => {
+            ignis_core::compute::ModelFamily::Qwen38_27b
+            | ignis_core::compute::ModelFamily::QwenImage21
+            | ignis_core::compute::ModelFamily::Qwen3Vl4b => {
                 Self::UNPACED
             }
         }

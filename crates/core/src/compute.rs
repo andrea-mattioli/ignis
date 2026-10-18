@@ -48,6 +48,11 @@ pub enum ModelFamily {
     /// transformer and a VAE, from its own artifact (spec image-model/01). No
     /// [`ModelConfig`] describes it: that topology is a text model's.
     QwenImage21,
+    /// Qwen3-VL-4B-Instruct on llama.cpp (ADR 0052): a dense text model with
+    /// the Qwen3.8 vision contract (16 px patches, 2x2 merge, M-RoPE),
+    /// served from a GGUF directory by `ignis-llama` on GPUs the CUDA leaf
+    /// does not target. Its geometry is llama.cpp's, read at load.
+    Qwen3Vl4b,
 }
 
 /// What a model produces (ADR 0050, `CONTEXT.md`): a **text model** tokens,
@@ -793,7 +798,7 @@ impl ModelFamily {
     /// The family an artifact's identity `model_id` names, or `None` for an
     /// artifact of no family (a test fixture).
     pub fn of_model_id(model_id: &str) -> Option<Self> {
-        [ModelFamily::Qwen38_27b, ModelFamily::FlashNext, ModelFamily::QwenImage21]
+        [ModelFamily::Qwen38_27b, ModelFamily::FlashNext, ModelFamily::QwenImage21, ModelFamily::Qwen3Vl4b]
             .into_iter()
             .find(|family| family.model_id() == model_id)
     }
@@ -806,7 +811,7 @@ impl ModelFamily {
     /// image model, which keeps no sequences.
     pub fn default_retained_host_slots(self) -> u32 {
         match self {
-            ModelFamily::Qwen38_27b => 2 * crate::N_DECODE_LANES as u32,
+            ModelFamily::Qwen38_27b | ModelFamily::Qwen3Vl4b => 2 * crate::N_DECODE_LANES as u32,
             ModelFamily::FlashNext => 8,
             ModelFamily::QwenImage21 => 0,
         }
@@ -822,7 +827,7 @@ impl ModelFamily {
     /// is one decode round per chunk (ADR 0018); 50 splits time evenly.
     pub fn default_decode_share_percent(self) -> u32 {
         match self {
-            ModelFamily::Qwen38_27b | ModelFamily::FlashNext | ModelFamily::QwenImage21 => 25,
+            ModelFamily::Qwen38_27b | ModelFamily::FlashNext | ModelFamily::QwenImage21 | ModelFamily::Qwen3Vl4b => 25,
         }
     }
 
@@ -833,7 +838,7 @@ impl ModelFamily {
     /// 27B, whose cut costs ~19 ms and whose prefills keep their splits.
     pub fn opener_page_rides_capture(self) -> bool {
         match self {
-            ModelFamily::Qwen38_27b | ModelFamily::QwenImage21 => false,
+            ModelFamily::Qwen38_27b | ModelFamily::QwenImage21 | ModelFamily::Qwen3Vl4b => false,
             ModelFamily::FlashNext => true,
         }
     }
@@ -846,25 +851,26 @@ impl ModelFamily {
             ModelFamily::Qwen38_27b => "qwen3.8-27b",
             ModelFamily::FlashNext => "qwen3.8-flash-next",
             ModelFamily::QwenImage21 => "ignis-image-2.1-turbo",
+            ModelFamily::Qwen3Vl4b => "qwen3-vl-4b",
         }
     }
 
     /// What the model produces (ADR 0050).
     pub fn kind(self) -> ModelKind {
         match self {
-            ModelFamily::Qwen38_27b | ModelFamily::FlashNext => ModelKind::Text,
+            ModelFamily::Qwen38_27b | ModelFamily::FlashNext | ModelFamily::Qwen3Vl4b => ModelKind::Text,
             ModelFamily::QwenImage21 => ModelKind::Image,
         }
     }
 
     /// Whether the model has a vision tower to take image parts with.
     pub fn takes_images(self) -> bool {
-        self == ModelFamily::Qwen38_27b
+        matches!(self, ModelFamily::Qwen38_27b | ModelFamily::Qwen3Vl4b)
     }
 
     /// Whether the model serves `/v1/decide`'s readouts.
     pub fn serves_readouts(self) -> bool {
-        self == ModelFamily::Qwen38_27b
+        matches!(self, ModelFamily::Qwen38_27b | ModelFamily::Qwen3Vl4b)
     }
 
     /// The model's speculative backend: the 27B's DFlash2 drafter, or
@@ -874,7 +880,7 @@ impl ModelFamily {
         match self {
             ModelFamily::Qwen38_27b => Some(crate::SpeculativeBackend::Dflash2),
             ModelFamily::FlashNext => Some(crate::SpeculativeBackend::Mtp),
-            ModelFamily::QwenImage21 => None,
+            ModelFamily::QwenImage21 | ModelFamily::Qwen3Vl4b => None,
         }
     }
 
@@ -884,6 +890,7 @@ impl ModelFamily {
             ModelFamily::Qwen38_27b => "Qwen3.8-27B",
             ModelFamily::FlashNext => "Qwen3.8-Flash-Next",
             ModelFamily::QwenImage21 => "Qwen-Image-2.1",
+            ModelFamily::Qwen3Vl4b => "Qwen3-VL-4B",
         }
     }
 
@@ -895,6 +902,7 @@ impl ModelFamily {
             ModelFamily::Qwen38_27b => 0,
             ModelFamily::FlashNext => 1,
             ModelFamily::QwenImage21 => 2,
+            ModelFamily::Qwen3Vl4b => 3,
         }
     }
 }

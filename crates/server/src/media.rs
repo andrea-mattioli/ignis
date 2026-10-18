@@ -169,11 +169,17 @@ pub fn load_processor(
     frontend: &ignis_artifact::FrontendSet,
     vision: ignis_core::Vision,
     max_context: u32,
+    family: ignis_core::compute::ModelFamily,
 ) -> Result<VisionProcessor, ProcessorError> {
-    let mut options = frontend.vision_processor()?.options().clone();
+    let mut options =
+        ignis_artifact::vision::ProcessorOptions::from_preprocessor_config(frontend.preprocessor_config())?;
     options.max_vision_tokens = u64::from(vision.envelope_tokens(max_context));
     options.max_raw_patches = options.max_vision_tokens * 4;
-    VisionProcessor::new(frontend.tokenizer(), options)
+    match family {
+        // the same vision contract over Qwen3-VL's vocabulary (ADR 0052)
+        ignis_core::compute::ModelFamily::Qwen3Vl4b => VisionProcessor::with_tokenizer_pads(frontend.tokenizer(), options),
+        _ => VisionProcessor::new(frontend.tokenizer(), options),
+    }
 }
 
 /// Whether any message carries an `image_url` part.
